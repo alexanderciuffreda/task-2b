@@ -233,18 +233,18 @@ def segment_diver(diver_img, roi_box, with_splash):
         closing_1 = cv2.morphologyEx(diver_threshed, cv2.MORPH_OPEN, kernel)
         dilation_1 = cv2.dilate(closing_1, kernel, iterations=1)
 
-    # flodd fill
-    cv2.imwrite("dilation.jpg", dilation_1)
-    des = cv2.bitwise_not(dilation_1)
-    contour, hier = cv2.findContours(des, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
-    for cnt in contour:
-        cv2.drawContours(des, [cnt], 0, 255, -1)
-    gray = cv2.bitwise_not(des)
-    dilation_1 = gray
+    im_flood_fill = dilation_1.copy()
+    h, w = dilation_1.shape[:2]
+    mask = np.zeros((h + 2, w + 2), np.uint8)
+    im_flood_fill = im_flood_fill.astype("uint8")
+    cv2.floodFill(im_flood_fill, mask, (0, 0), 255)
+    im_flood_fill_inv = cv2.bitwise_not(im_flood_fill)
+    img_out = dilation_1 | im_flood_fill_inv
+    return img_out
     # include gray in black image
     black_image_flood = np.zeros((np.array(image).shape[0], np.array(image).shape[1])).astype(np.uint8)
 
-    black_image_flood[top:top_h, left:left_w] = gray
+    black_image_flood[top:top_h, left:left_w] = img_out
     cv2.imshow("flood", gray)
 
 
