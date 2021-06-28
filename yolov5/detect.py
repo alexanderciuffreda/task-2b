@@ -8,6 +8,7 @@ import argparse
 import sys
 import time
 from pathlib import Path
+from random import random
 
 import cv2
 import torch
@@ -108,11 +109,6 @@ def segment_splash(splash_img, roi_box):
 
 
 
-
-
-
-
-
     img_3c_full[:, :, 0] = erosion_full_image
     img_3c_full[:, :, 1] = erosion_full_image
     img_3c_full[:, :, 2] = erosion_full_image
@@ -178,6 +174,7 @@ def segment_diver(diver_img, roi_box, with_splash):
     max_blue = 480*640*255
     percentage_blue= round(((blue_channel_sum/max_blue)*100))
     blue_background = False
+    contours_inv = []
 
     if percentage_blue > 70:
         blue_background = True
@@ -190,13 +187,15 @@ def segment_diver(diver_img, roi_box, with_splash):
         print("Threshold with splash")
         ORANGE_MIN = np.array([0, 0, 0], np.uint8)
         ORANGE_MAX = np.array([255, 63, 197], np.uint8)
-        kernel = np.ones((6, 6), np.uint8)
+        kernel = np.ones((4, 4), np.uint8)
         img_blr = cv2.medianBlur(image_roi, 3)
 
         hsv_img = cv2.cvtColor(img_blr, cv2.COLOR_BGR2HSV)
         diver_threshed = cv2.inRange(hsv_img, ORANGE_MIN, ORANGE_MAX)
+
         closing_1 = cv2.morphologyEx(diver_threshed, cv2.MORPH_OPEN, kernel)
         dilation_1 = cv2.dilate(closing_1, kernel, iterations=1)
+
 
 
 
@@ -205,47 +204,167 @@ def segment_diver(diver_img, roi_box, with_splash):
         print("Threshold with blue background")
 
         ORANGE_MIN = np.array([24, 0, 0], np.uint8)
-        #ORANGE_MAX = np.array([229, 150, 250], np.uint8)
-        ORANGE_MAX = np.array([210, 150, 250], np.uint8)
+        #ORANGE_MAX = np.array([210, 170, 250], np.uint8)
+        ORANGE_MAX = np.array([210, 130, 250], np.uint8)
 
 
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        img_blr = cv2.medianBlur(image_roi, 3)
-
+        #kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        img_blr = cv2.medianBlur(image_roi, 1)
         hsv_img = cv2.cvtColor(img_blr, cv2.COLOR_BGR2HSV)
         diver_threshed = cv2.inRange(hsv_img, ORANGE_MIN, ORANGE_MAX)
-        # open to fill holes
-        res = cv2.morphologyEx(diver_threshed, cv2.MORPH_OPEN, kernel)
-        dilation_1 = res
+        # close to fill holes
+        kernel = np.ones((1, 1), np.uint8)
+        closing_hsv = cv2.morphologyEx(diver_threshed, cv2.MORPH_CLOSE, kernel)
+        #erosion = cv2.erode(closing_1, kernel, iterations=1)
+
+
+
+        ###### Grayscale
+        # convert to gray
+        img_gray_diver = cv2.cvtColor(img_blr, cv2.COLOR_BGR2GRAY)
+        # cv2.imshow("2: Grayscale", full_image_gray)
+        # stretch contrast histeq
+        img_equ_diver = cv2.equalizeHist(img_gray_diver)
+        # cv2.imshow("3: Equalize",img_equ)
+
+        # threshold image
+        thresh, img_diver_gray_th = cv2.threshold(img_equ_diver, 245, 255, cv2.THRESH_BINARY)
+
+        combined_diver = cv2.bitwise_or(img_diver_gray_th, closing_hsv)
+        # show combined diver
+        black_image_combined = np.zeros((np.array(diver_img).shape[0], np.array(diver_img).shape[1])).astype(np.uint8)
+
+        black_image_combined[top:top_h, left:left_w] = combined_diver
+        cv2.imshow("combined diver", black_image_combined)
+
+        dilation_1 = combined_diver
+
+        """
+        # flodd fill
+        im_flood_fill = dilation_1.copy()
+        h, w = dilation_1.shape[:2]
+        mask = np.zeros((h + 2, w + 2), np.uint8)
+        im_flood_fill = im_flood_fill.astype("uint8")
+        cv2.floodFill(im_flood_fill, mask, (0, 0), 255)
+        im_flood_fill_inv = cv2.bitwise_not(im_flood_fill)
+        # find contours on inverted image
+        contours_inv, hier_inv = cv2.findContours(im_flood_fill_inv, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        contours_inv = sorted(contours_inv, key=cv2.contourArea)
+        """
+
+
 
 
     else:
         print("Threshold with normal")
 
-        ORANGE_MIN = np.array([0, 53, 94], np.uint8)
-        ORANGE_MAX = np.array([26, 255, 255], np.uint8)
+        #ORANGE_MIN = np.array([0, 53, 94], np.uint8)
+        #ORANGE_MAX = np.array([26, 255, 255], np.uint8)
 
-        kernel = np.ones((1, 1), np.uint8)
-        img_blr = cv2.medianBlur(image_roi, 3)
+        ORANGE_MIN = np.array([0, 50, 125], np.uint8)
+        ORANGE_MAX = np.array([14, 255, 255], np.uint8)
 
-        hsv_img = cv2.cvtColor(img_blr, cv2.COLOR_BGR2HSV)
+        kernel_close_hsv = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        kernel_close_gray = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+        kernel_close_gray_combined = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+
+        kernel_dilate_hsv = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+
+
+        kernel_erode = np.ones((1, 1), np.uint8)
+
+        img_blr_hsv = cv2.medianBlur(image_roi, 1)
+        img_blr_gray = cv2.medianBlur(image_roi, 3)
+
+
+        hsv_img = cv2.cvtColor(img_blr_hsv, cv2.COLOR_BGR2HSV)
         diver_threshed = cv2.inRange(hsv_img, ORANGE_MIN, ORANGE_MAX)
-        closing_1 = cv2.morphologyEx(diver_threshed, cv2.MORPH_OPEN, kernel)
-        dilation_1 = cv2.dilate(closing_1, kernel, iterations=1)
+        diver_threshed = cv2.dilate(diver_threshed, kernel_dilate_hsv, iterations=1)
+        diver_threshed_hsv = cv2.morphologyEx(diver_threshed, cv2.MORPH_OPEN, kernel_dilate_hsv)
+        #closing_1 = cv2.morphologyEx(diver_threshed, cv2.MORPH_CLOSE, kernel_close_hsv)
+        #erosion = cv2.erode(closing_1, kernel_erode, iterations=1)
+        #dilation_1 = cv2.dilate(closing_1, kernel, iterations=1)
+        ##K-MEANS
+        Z = image_roi.reshape((-1, 3))
+        # convert to np.float32
+        Z = np.float32(Z)
+        # define criteria, number of clusters(K) and apply kmeans()
+        criteria = (cv2.TERM_CRITERIA_EPS + 1, 10, 1.0)
+        K = 5
+        ret, label, center = cv2.kmeans(Z, K, None, criteria, 10, cv2.KMEANS_PP_CENTERS)
+        # Now convert back into uint8, and make original image
+        center = np.uint8(center)
+        res = center[label.flatten()]
+        k_means = res.reshape((image_roi.shape))
 
-    im_flood_fill = dilation_1.copy()
-    h, w = dilation_1.shape[:2]
-    mask = np.zeros((h + 2, w + 2), np.uint8)
-    im_flood_fill = im_flood_fill.astype("uint8")
-    cv2.floodFill(im_flood_fill, mask, (0, 0), 255)
-    im_flood_fill_inv = cv2.bitwise_not(im_flood_fill)
-    img_out = dilation_1 | im_flood_fill_inv
-    return img_out
-    # include gray in black image
-    black_image_flood = np.zeros((np.array(image).shape[0], np.array(image).shape[1])).astype(np.uint8)
+        img_blr_gray = cv2.medianBlur(k_means, 1)
 
-    black_image_flood[top:top_h, left:left_w] = img_out
-    cv2.imshow("flood", gray)
+
+
+        ###### Grayscale
+        # convert to gray
+        img_gray_diver = cv2.cvtColor(img_blr_gray, cv2.COLOR_BGR2GRAY)
+        # cv2.imshow("2: Grayscale", full_image_gray)
+        # stretch contrast histeq
+        img_equ_diver = cv2.equalizeHist(img_gray_diver)
+        #cv2.imshow("3: Equalize",img_equ_diver)
+
+        # threshold image
+        thresh, img_diver_gray_th = cv2.threshold(img_equ_diver, 254, 255, cv2.THRESH_BINARY)
+        img_diver_gray_th = cv2.morphologyEx(img_diver_gray_th, cv2.MORPH_CLOSE, kernel_close_gray)
+
+        #img_diver_gray_th = cv2.bitwise_not(img_diver_gray_th)
+
+        contours_gray_kmeans, hier_inv = cv2.findContours(img_diver_gray_th, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        contours_gray_kmeans = sorted(contours_gray_kmeans, key=cv2.contourArea)
+        for c in contours_gray_kmeans:
+            cv2.fillPoly(img_diver_gray_th, pts=[c], color=(0, 0, 0))
+        for c in contours_gray_kmeans[-1]:
+            cv2.fillPoly(img_diver_gray_th, pts=[c], color=(255, 255, 255))
+
+
+        combined_diver = cv2.bitwise_or(img_diver_gray_th, diver_threshed_hsv)
+        combined_diver = cv2.morphologyEx(combined_diver, cv2.MORPH_CLOSE, kernel_close_gray_combined)
+        #combined_diver = cv2.erode(combined_diver, kernel_erode, iterations=1)
+        # show combined diver
+        black_image_combined = np.zeros((np.array(diver_img).shape[0], np.array(diver_img).shape[1])).astype(np.uint8)
+        black_image_thresh_hsv = np.zeros((np.array(diver_img).shape[0], np.array(diver_img).shape[1])).astype(np.uint8)
+        black_image_thresh_gray = np.zeros((np.array(diver_img).shape[0], np.array(diver_img).shape[1])).astype(np.uint8)
+
+
+
+        black_image_combined[top:top_h, left:left_w] = combined_diver
+        black_image_thresh_hsv[top:top_h, left:left_w] = diver_threshed_hsv
+        black_image_thresh_gray[top:top_h, left:left_w] = img_diver_gray_th
+
+        #cv2.imshow("diver_threshed_hsv", black_image_thresh_hsv)
+        #cv2.imshow("black_image_combined", black_image_combined)
+        cv2.imshow("black_image_gray", black_image_thresh_gray)
+
+
+
+
+
+        dilation_1 = combined_diver
+        # flood fill
+        im_flood_fill = dilation_1.copy()
+        h, w = dilation_1.shape[:2]
+        mask = np.zeros((h + 2, w + 2), np.uint8)
+        im_flood_fill = im_flood_fill.astype("uint8")
+        cv2.floodFill(im_flood_fill, mask, (0, 0), 255)
+        im_flood_fill_inv = cv2.bitwise_not(im_flood_fill)
+        # find contours on inverted image
+        contours_inv, hier_inv = cv2.findContours(im_flood_fill_inv, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        contours_inv = sorted(contours_inv, key=cv2.contourArea)
+        # remove largest element
+
+    # remove large contours
+    for i, c in enumerate(contours_inv):
+        print(i)
+        size = cv2.contourArea(c)
+        if size > 500:
+            contours_inv.pop(i)
+
 
 
 
@@ -258,7 +377,11 @@ def segment_diver(diver_img, roi_box, with_splash):
     img_3c_roi[:, :, 2] = dilation_1
 
     contours_2 = sorted(contours_2, key=cv2.contourArea)
+
     for c in contours_2:
+        cv2.fillPoly(img_3c_roi, pts=[c], color=(0, 255, 0))
+    # fill flood fill inv contoures
+    for c in contours_inv:
         cv2.fillPoly(img_3c_roi, pts=[c], color=(0, 255, 0))
 
 
